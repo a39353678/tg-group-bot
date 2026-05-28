@@ -1,0 +1,27 @@
+name = "tg-group-bot"
+main = "src/index.js"
+compatibility_date = "2026-05-28"
+
+# Cron 定时任务（每5分钟检查安静模式是否到期）
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Workers AI 绑定
+[ai]
+binding = "AI"
+
+# D1 数据库（存储配置、关键词、密码等）
+# 首次部署请先运行: npx wrangler d1 create tg-group-bot-db
+# 将输出的 database_id 填入下方
+[[d1_databases]]
+binding = "BOT_DB"
+database_name = "tg-group-bot-db"
+database_id = "YOUR_DATABASE_ID_HERE"
+
+# 环境变量（非敏感信息）
+[vars]
+BOT_NAME = "TG群管理机器人"
+
+# ⚠️ 敏感信息请通过 secret 注入，不要写在配置文件中：
+#   npx wrangler secret put BOT_TOKEN     # Telegram Bot Token（必需）
+#   npx wrangler secret put CLOUDFLARE_API_TOKEN  # 自动从 wrangler login 获取
