@@ -460,11 +460,16 @@ document.getElementById("tabBar").addEventListener("click", function(e) {
 });
 
 // === 登录状态 ===
-(function() {
+(async function() {
   if (sessionStorage.getItem("bot_admin") === "authed") {
     document.getElementById("loginPanel").style.display = "none";
     document.getElementById("mainPanel").style.display = "block";
-    loadGroups();
+    await loadGroups();
+    // 恢复上次选择的群组
+    var savedGroup = sessionStorage.getItem("bot_selected_group");
+    if (savedGroup) {
+      document.getElementById("groupSelector").value = savedGroup;
+    }
     loadConfig();
   }
 })();
@@ -491,7 +496,11 @@ async function doLogin() {
       document.getElementById("loginPanel").style.display = "none";
       document.getElementById("mainPanel").style.display = "block";
       showToast("登录成功", "success");
-      loadGroups();
+      await loadGroups();
+      var savedGroup = sessionStorage.getItem("bot_selected_group");
+      if (savedGroup) {
+        document.getElementById("groupSelector").value = savedGroup;
+      }
       loadConfig();
     } else {
       showToast(d.error || "密码错误", "error");
@@ -528,6 +537,8 @@ async function loadGroups() {
 }
 
 function switchGroup() {
+  var chatId = document.getElementById("groupSelector").value;
+  sessionStorage.setItem("bot_selected_group", chatId);
   loadConfig();
 }
 

@@ -738,12 +738,20 @@ async function scheduleAutoDelete(token, chatId, result, config, ctx) {
   const seconds = config.auto_delete_notification_seconds;
   if (seconds > 0 && result?.result?.message_id) {
     const msgId = result.result.message_id;
-    ctx.waitUntil((async () => {
-      await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+    const deletePromise = (async () => {
       try {
+        // 轮询等待，比 setTimeout 更可靠
+        const start = Date.now();
+        const waitMs = seconds * 1000;
+        while (Date.now() - start < waitMs) {
+          await new Promise(r => setTimeout(r, Math.min(1000, waitMs - (Date.now() - start))));
+        }
         await deleteMessage(token, chatId, msgId);
       } catch (e) { /* 忽略删除失败 */ }
-    })());
+    })();
+    if (typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(deletePromise);
+    }
   }
 }
 
