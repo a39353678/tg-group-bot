@@ -3,6 +3,7 @@
  */
 
 import { getConfig, saveConfig, getGroupConfig, saveGroupConfig, getGroupList, verifyPassword, hasPassword, setPassword, addKeyword, removeKeyword } from "./config.js";
+import { getActiveLotteries, createLottery, forceDraw } from "./lottery.js";
 
 export async function handleAdmin(request, env) {
   const url = new URL(request.url);
@@ -19,6 +20,11 @@ export async function handleAdmin(request, env) {
     if (request.method === "POST") return handleAddKeyword(request, env);
     if (request.method === "DELETE") return handleRemoveKeyword(request, env);
   }
+  if (path === "/admin/api/lottery") {
+    if (request.method === "GET") return handleGetLotteries(request, env);
+    if (request.method === "POST") return handleCreateLottery(request, env);
+  }
+  if (path === "/admin/api/lottery/draw" && request.method === "POST") return handleDrawLottery(request, env);
 
   return renderAdminPage(env);
 }
@@ -190,6 +196,7 @@ textarea{min-height:80px;resize:vertical;font-family:inherit}
   <button class="tab" data-tab="tab-toxic">🛡️ 过滤</button>
   <button class="tab" data-tab="tab-quiet">🔇 安静</button>
   <button class="tab" data-tab="tab-admin">🔨 管理</button>
+  <button class="tab" data-tab="tab-lottery">🎰 抽奖</button>
   <button class="tab" data-tab="tab-about">ℹ️</button>
 </div>
 
@@ -366,6 +373,45 @@ textarea{min-height:80px;resize:vertical;font-family:inherit}
   </div>
 </div>
 
+<!-- 模块: 抽奖管理 -->
+<div id="tab-lottery" class="panel">
+  <div class="card">
+    <div class="module-title">🎰 抽奖管理</div>
+    <div class="module-desc">在群组中发起抽奖活动，成员点击按钮参与，支持定时自动开奖或手动开奖</div>
+
+    <div class="setting-group">
+      <div class="sg-title">创建新抽奖</div>
+      <div class="sg-row">
+        <label>群组</label>
+        <select id="lotteryGroup" style="flex:1;margin-bottom:0" onchange="loadLotteries()">
+          <option value="">请先选择群组...</option>
+        </select>
+      </div>
+      <div class="sg-row">
+        <label>奖品</label>
+        <input type="text" id="lotteryPrize" placeholder="如：红包、周边、礼品卡" style="flex:1;margin-bottom:0">
+      </div>
+      <div class="sg-row">
+        <label>时长(分)</label>
+        <input type="number" id="lotteryDuration" min="1" max="1440" value="5" style="width:80px;margin-bottom:0">
+      </div>
+      <div class="sg-row">
+        <label>中奖人数</label>
+        <input type="number" id="lotteryWinners" min="1" max="50" value="1" style="width:80px;margin-bottom:0">
+      </div>
+      <div style="margin-top:8px">
+        <button class="btn btn-primary" onclick="createLottery()" id="createLotteryBtn">🎁 发起抽奖</button>
+        <button class="btn btn-outline btn-sm" onclick="loadLotteries()" style="margin-left:6px">🔄 刷新</button>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="sg-title">进行中的抽奖</div>
+      <div id="lotteryList"><span style="color:#556;font-size:12px">选择群组后自动加载</span></div>
+    </div>
+  </div>
+</div>
+
 <!-- 模块: 关于 -->
 <div id="tab-about" class="panel">
   <div class="card" style="text-align:center">
@@ -465,11 +511,16 @@ async function loadGroups() {
     const d = await r.json();
     if (d.ok && d.groups) {
       const sel = document.getElementById("groupSelector");
+      const lotterySel = document.getElementById("lotteryGroup");
       d.groups.forEach(function(g) {
         const opt = document.createElement("option");
         opt.value = g.id;
         opt.textContent = '👥 ' + (g.title || '未命名群组');
         sel.appendChild(opt);
+        const opt2 = document.createElement("option");
+        opt2.value = g.id;
+        opt2.textContent = '👥 ' + (g.title || '未命名群组');
+        lotterySel.appendChild(opt2);
       });
     }
   } catch(e) { console.error(e); }
@@ -595,6 +646,77 @@ async function saveAll() {
     btn.disabled = false; btn.textContent = "💾 保存全部设置";
   } catch(e) { showToast("保存失败", "error"); }
 }
+
+// === 抽奖管理 ===
+async function loadLotteries() {
+  const container = document.getElementById("lotteryList");
+  const chatId = document.getElementById("lotteryGroup").value;
+  if (!chatId) {
+    container.innerHTML = '<span style="color:#556;font-size:12px">请先选择群组</span>';
+    return;
+  }
+  try {
+    const r = await fetch("/admin/api/lottery?chatId=" + chatId);
+    const d = await r.json();
+    if (d.ok && d.lotteries.length > 0) {
+      container.innerHTML = d.lotteries.map(function(l) {
+        const remaining = l.remaining > 0 ? Math.ceil(l.remaining / 60) + " 分钟" : "即将开奖";
+        return '<div style="background:#0f0f1a;border-radius:8px;padding:10px;margin-bottom:6px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<div><b>' + l.prize + '</b> · ' + l.participants + '人参与 · ' + remaining + '</div>' +
+          '<button class="btn btn-danger btn-sm" onclick="drawLottery(' + l.chatId + ')">开奖</button>' +
+          '</div></div>';
+      }).join("");
+    } else {
+      container.innerHTML = '<span style="color:#556;font-size:12px">当前没有进行中的抽奖</span>';
+    }
+  } catch(e) { container.innerHTML = '<span style="color:#e53935;font-size:12px">加载失败</span>'; }
+}
+
+async function createLottery() {
+  const chatId = document.getElementById("lotteryGroup").value;
+  const prize = document.getElementById("lotteryPrize").value.trim();
+  const duration = parseInt(document.getElementById("lotteryDuration").value) || 5;
+  const winners = parseInt(document.getElementById("lotteryWinners").value) || 1;
+
+  if (!chatId) { showToast("请选择群组", "error"); return; }
+  if (!prize) { showToast("请输入奖品名称", "error"); return; }
+
+  const btn = document.getElementById("createLotteryBtn");
+  btn.disabled = true; btn.textContent = "⏳ 创建中...";
+  try {
+    const r = await fetch("/admin/api/lottery", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ chatId: parseInt(chatId), prize, duration, winners })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast("✅ 抽奖已创建", "success");
+      document.getElementById("lotteryPrize").value = "";
+      loadLotteries();
+    } else {
+      showToast(d.error || "创建失败", "error");
+    }
+  } catch(e) { showToast("网络错误", "error"); }
+  btn.disabled = false; btn.textContent = "🎁 发起抽奖";
+}
+
+async function drawLottery(chatId) {
+  if (!confirm("确认立即开奖？")) return;
+  try {
+    const r = await fetch("/admin/api/lottery/draw", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ chatId })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast("✅ 已开奖", "success");
+      loadLotteries();
+    } else {
+      showToast(d.error || "开奖失败", "error");
+    }
+  } catch(e) { showToast("网络错误", "error"); }
+}
 </script>
 </body>
 </html>`;
@@ -688,6 +810,41 @@ async function handleGetGroups(request, env) {
   try {
     const groups = await getGroupList(env.BOT_DB);
     return Response.json({ ok: true, groups });
+  } catch (e) {
+    return Response.json({ ok: false, error: e.message });
+  }
+}
+
+async function handleGetLotteries(request, env) {
+  const url = new URL(request.url);
+  const chatId = url.searchParams.get('chatId');
+  const lotteries = getActiveLotteries();
+  const filtered = chatId ? lotteries.filter(l => l.chatId === parseInt(chatId)) : lotteries;
+  return Response.json({ ok: true, lotteries: filtered });
+}
+
+async function handleCreateLottery(request, env) {
+  try {
+    const { chatId, prize, duration, winners } = await request.json();
+    if (!chatId || !prize) {
+      return Response.json({ ok: false, error: "缺少参数" });
+    }
+    // 管理面板创建抽奖，msgFrom 为匿名
+    const result = await createLottery(env.BOT_TOKEN, chatId, 0, prize, duration || 5, winners || 1, null, { waitUntil: () => {} });
+    return Response.json({ ok: result.ok, message: result.message, error: result.ok ? undefined : result.message });
+  } catch (e) {
+    return Response.json({ ok: false, error: e.message });
+  }
+}
+
+async function handleDrawLottery(request, env) {
+  try {
+    const { chatId } = await request.json();
+    if (!chatId) {
+      return Response.json({ ok: false, error: "缺少参数" });
+    }
+    const result = await forceDraw(env.BOT_TOKEN, chatId);
+    return Response.json({ ok: result.ok, message: result.message, error: result.ok ? undefined : result.message });
   } catch (e) {
     return Response.json({ ok: false, error: e.message });
   }
