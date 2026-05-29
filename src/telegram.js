@@ -199,6 +199,41 @@ export const PERMISSIONS_RESTORE_ALL = {
 };
 
 /**
+ * 回应回调查询（inline 按钮点击）
+ */
+export async function answerCallbackQuery(token, callbackQueryId, text) {
+  return callApi(token, 'answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    text,
+    show_alert: false,
+  });
+}
+
+/**
+ * 编辑消息文本
+ */
+export async function editMessageText(token, chatId, messageId, text, options = {}) {
+  return callApi(token, 'editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: 'HTML',
+    ...options,
+  });
+}
+
+/**
+ * 编辑消息回复键盘
+ */
+export async function editMessageReplyMarkup(token, chatId, messageId, replyMarkup) {
+  return callApi(token, 'editMessageReplyMarkup', {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: replyMarkup,
+  });
+}
+
+/**
  * 离开群组
  */
 export async function leaveChat(token, chatId) {

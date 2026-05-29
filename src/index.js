@@ -73,7 +73,7 @@ async function setupWebhook(request, env) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url: webhookUrlFull,
-      allowed_updates: ['message', 'chat_member', 'my_chat_member'],
+      allowed_updates: ['message', 'chat_member', 'my_chat_member', 'callback_query'],
     }),
   });
 

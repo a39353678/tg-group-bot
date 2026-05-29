@@ -16,7 +16,7 @@ binding = "AI"
 [[d1_databases]]
 binding = "BOT_DB"
 database_name = "tg-group-bot-db"
-database_id = "YOUR_DATABASE_ID_HERE"
+database_id = "a59cc1d4-0c87-4faf-8087-b51b0bffd3c1"
 
 # 环境变量（非敏感信息）
 [vars]

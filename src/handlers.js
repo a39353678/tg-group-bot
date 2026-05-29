@@ -8,6 +8,7 @@ import {
   deleteMessage, restrictMember, banMember, unbanMember,
   unrestrictMember, getChatAdministrators, sendWelcome,
   setChatPermissions, PERMISSIONS_RESTRICT_ALL, PERMISSIONS_RESTORE_ALL,
+  sendWithKeyboard, answerCallbackQuery, editMessageText, editMessageReplyMarkup,
 } from './telegram';
 import { aiChat, detectSpam, detectToxicContent } from './ai';
 import { getGroupConfig, saveGroupConfig, getConfig, shouldBlockMessage, recordGroup, deleteGroupConfig } from './config.js';
@@ -36,7 +37,16 @@ export async function handleUpdate(update, env, ctx) {
     await handleMyChatMember(update.my_chat_member, env);
     return;
   }
+
+  // --- 处理按钮点击（抽奖参与等） ---
+  if (update.callback_query) {
+    await handleCallbackQuery(update.callback_query, env, ctx);
+    return;
+  }
 }
+
+// ======== 抽奖会话存储（内存 Map，类似验证码） ========
+const lotterySessions = new Map();
 
 /**
  * 处理消息
@@ -141,6 +151,24 @@ async function handleMessage(msg, env, ctx) {
           return;
         }
         await handleQuietMode(token, db, chatId, userId, messageId, config, ctx);
+        return;
+
+      case '/lottery':
+      case '/抽奖':
+        if (!config.admin_commands) {
+          await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
+          return;
+        }
+        await handleLottery(token, chatId, userId, msg, args, config, ctx);
+        return;
+
+      case '/draw':
+      case '/开奖':
+        if (!config.admin_commands) {
+          await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
+          return;
+        }
+        await handleDraw(token, chatId, userId, msg, config, ctx);
         return;
 
       case '/about':
@@ -568,6 +596,233 @@ async function handleQuietMode(token, db, chatId, userId, messageId, config, ctx
       config, ctx
     );
   }
+}
+
+// ========== 抽奖功能 ==========
+
+/**
+ * /lottery 或 /抽奖 - 创建新抽奖
+ * 用法: /抽奖 奖品名称 [时长(分钟)] [中奖人数]
+ * 示例: /抽奖 红包 10 3
+ */
+async function handleLottery(token, chatId, userId, msg, args, config, ctx) {
+  if (chatId > 0) {
+    await replyMessage(token, chatId, msg.message_id, '⚠️ 该命令只能在群组中使用。');
+    return;
+  }
+
+  const isAdmin = await checkAdmin(token, chatId, userId);
+  if (!isAdmin) {
+    await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限创建抽奖（需要管理员权限）。', config, ctx);
+    return;
+  }
+
+  // 检查是否已有进行中的抽奖
+  const existingKey = `lottery:${chatId}`;
+  if (lotterySessions.has(existingKey)) {
+    await replyNotification(token, chatId, msg.message_id, '⚠️ 当前已有进行中的抽奖，请等待结束后再创建新的。', config, ctx);
+    return;
+  }
+
+  // 解析参数
+  if (args.length === 0) {
+    await replyNotification(token, chatId, msg.message_id,
+      '📋 用法: /抽奖 奖品名称 [时长分钟] [中奖人数]\n示例: /抽奖 红包 10 3', config, ctx);
+    return;
+  }
+
+  let prize = args[0];
+  let durationMin = 5;
+  let winnerCount = 1;
+
+  // 智能解析：第二个参数可能是时长或奖品名的一部分
+  if (args.length >= 2) {
+    const num2 = parseInt(args[1]);
+    if (!isNaN(num2) && num2 > 0) {
+      durationMin = num2;
+    } else {
+      prize = args.slice(0, 2).join(' ');
+      if (args.length >= 3) {
+        const num3 = parseInt(args[2]);
+        if (!isNaN(num3) && num3 > 0) durationMin = num3;
+      }
+    }
+  }
+  if (args.length >= 3) {
+    const lastNum = parseInt(args[args.length - 1]);
+    if (!isNaN(lastNum) && lastNum > 0) winnerCount = lastNum;
+  }
+
+  if (durationMin > 1440) durationMin = 1440; // 最长 24 小时
+  if (winnerCount > 50) winnerCount = 50;     // 最多 50 人
+
+  const endTime = Date.now() + durationMin * 60 * 1000;
+
+  // 发送抽奖公告（带参与按钮）
+  const result = await sendWithKeyboard(token, chatId,
+    `🎰 <b>抽奖活动</b>\n\n` +
+    `🎁 奖品: <b>${prize}</b>\n` +
+    `👥 中奖人数: <b>${winnerCount}</b> 人\n` +
+    `⏱️ 结束时间: <b>${durationMin} 分钟</b>后\n\n` +
+    `👇 点击下方按钮参与抽奖`,
+    [[{ text: '🎲 参与抽奖 (0人)', callback_data: 'lottery_join' }]]
+  );
+
+  if (!result?.ok) {
+    await replyNotification(token, chatId, msg.message_id, '❌ 抽奖创建失败，请检查机器人权限。', config, ctx);
+    return;
+  }
+
+  const messageId = result.result.message_id;
+
+  // 保存抽奖会话
+  lotterySessions.set(existingKey, {
+    chatId,
+    prize,
+    participants: new Map(), // userId -> { name, username }
+    messageId,
+    endTime,
+    winnerCount,
+    timerFired: false,
+    msgFrom: msg.from,
+  });
+
+  // 定时自动开奖
+  ctx.waitUntil((async () => {
+    await new Promise(resolve => setTimeout(resolve, durationMin * 60 * 1000 + 2000));
+    const lottery = lotterySessions.get(existingKey);
+    if (lottery && !lottery.timerFired) {
+      lottery.timerFired = true;
+      await drawWinner(token, chatId, messageId, lottery);
+      lotterySessions.delete(existingKey);
+    }
+  })());
+
+  await deleteMessage(token, chatId, msg.message_id);
+}
+
+/**
+ * /draw 或 /开奖 - 手动提前开奖
+ */
+async function handleDraw(token, chatId, userId, msg, config, ctx) {
+  if (chatId > 0) {
+    await replyMessage(token, chatId, msg.message_id, '⚠️ 该命令只能在群组中使用。');
+    return;
+  }
+
+  const isAdmin = await checkAdmin(token, chatId, userId);
+  if (!isAdmin) {
+    await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限执行此操作（需要管理员权限）。', config, ctx);
+    return;
+  }
+
+  const key = `lottery:${chatId}`;
+  const lottery = lotterySessions.get(key);
+
+  if (!lottery) {
+    await replyNotification(token, chatId, msg.message_id, '⚠️ 当前没有进行中的抽奖。', config, ctx);
+    return;
+  }
+
+  lottery.timerFired = true;
+  await drawWinner(token, chatId, lottery.messageId, lottery);
+  lotterySessions.delete(key);
+  await deleteMessage(token, chatId, msg.message_id);
+}
+
+/**
+ * 执行开奖逻辑
+ */
+async function drawWinner(token, chatId, messageId, lottery) {
+  const { prize, participants, winnerCount } = lottery;
+
+  if (participants.size === 0) {
+    // 无人参与
+    await editMessageText(token, chatId, messageId,
+      `🎰 <b>抽奖结束</b>\n\n` +
+      `🎁 奖品: <b>${prize}</b>\n\n` +
+      `😔 无人参与，抽奖取消`,
+      { reply_markup: JSON.stringify({ inline_keyboard: [] }) }
+    );
+    return;
+  }
+
+  // 随机抽取中奖者
+  const allParticipants = Array.from(participants.values());
+  const winners = [];
+  const pool = [...allParticipants];
+
+  while (winners.length < winnerCount && pool.length > 0) {
+    const idx = Math.floor(Math.random() * pool.length);
+    winners.push(pool.splice(idx, 1)[0]);
+  }
+
+  const winnersText = winners.map((w, i) =>
+    `${i + 1}. <a href="tg://user?id=${w.userId}">${w.name}</a>`
+  ).join('\n');
+
+  const resultText =
+    `🎰 <b>抽奖结果</b>\n\n` +
+    `🎁 奖品: <b>${prize}</b>\n` +
+    `👥 参与人数: <b>${participants.size}</b> 人\n\n` +
+    `🏆 <b>中奖者:</b>\n${winnersText}\n\n` +
+    `🎉 恭喜以上中奖者！`;
+
+  await editMessageText(token, chatId, messageId, resultText, {
+    reply_markup: JSON.stringify({ inline_keyboard: [] }),
+  });
+}
+
+/**
+ * 处理 callback_query（inline 按钮点击）
+ */
+async function handleCallbackQuery(callbackQuery, env, ctx) {
+  const { BOT_TOKEN: token } = env;
+  const { data, from, message, id: callbackId } = callbackQuery;
+  const chatId = message?.chat?.id;
+  const userId = from.id;
+  const name = from.first_name || '用户';
+
+  if (!chatId) return;
+
+  // 确保 bot 回应 callback，去掉 Telegram 客户端的加载动画
+  await answerCallbackQuery(token, callbackId);
+
+  // 目前只处理抽奖参与
+  if (data !== 'lottery_join') return;
+
+  const key = `lottery:${chatId}`;
+  const lottery = lotterySessions.get(key);
+
+  if (!lottery) {
+    await answerCallbackQuery(token, callbackId, '❌ 抽奖已结束');
+    return;
+  }
+
+  // 检查是否已参与
+  if (lottery.participants.has(userId)) {
+    await answerCallbackQuery(token, callbackId, '✅ 你已经参与了，无需重复点击');
+    return;
+  }
+
+  // 添加参与者
+  lottery.participants.set(userId, {
+    userId,
+    name,
+    username: from.username,
+  });
+
+  // 更新按钮文字显示参与人数
+  const count = lottery.participants.size;
+  try {
+    await editMessageReplyMarkup(token, chatId, message.message_id,
+      JSON.stringify({
+        inline_keyboard: [[{ text: `🎲 参与抽奖 (${count}人)`, callback_data: 'lottery_join' }]]
+      })
+    );
+  } catch (e) { /* 编辑失败忽略，可能是 Telegram 限流 */ }
+
+  await answerCallbackQuery(token, callbackId, `✅ 参与成功！当前 ${count} 人参与`);
 }
 
 /**
