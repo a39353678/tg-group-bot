@@ -24,6 +24,19 @@ CREATE TABLE IF NOT EXISTS admin_password (
   password TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS lottery_sessions (
+  chat_id INTEGER NOT NULL PRIMARY KEY,
+  prize TEXT NOT NULL,
+  message_id INTEGER NOT NULL,
+  winner_count INTEGER NOT NULL DEFAULT 1,
+  end_time INTEGER NOT NULL,
+  participants_json TEXT NOT NULL DEFAULT '{}',
+  winners_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'active',
+  drawn_at INTEGER DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 -- 初始化全局配置和密码占位行
 INSERT OR IGNORE INTO global_config (id, config_json) VALUES (1, '{}');
 INSERT OR IGNORE INTO admin_password (id, password) VALUES (1, '');

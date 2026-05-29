@@ -3,7 +3,7 @@
  */
 
 import { getConfig, saveConfig, getGroupConfig, saveGroupConfig, getGroupList, verifyPassword, hasPassword, setPassword, addKeyword, removeKeyword } from "./config.js";
-import { getActiveLotteries, createLottery, forceDraw } from "./lottery.js";
+import { getActiveLotteries, createLottery, forceDraw, deleteLotteryResult } from "./lottery.js";
 
 export async function handleAdmin(request, env) {
   const url = new URL(request.url);
@@ -25,6 +25,7 @@ export async function handleAdmin(request, env) {
     if (request.method === "POST") return handleCreateLottery(request, env);
   }
   if (path === "/admin/api/lottery/draw" && request.method === "POST") return handleDrawLottery(request, env);
+  if (path === "/admin/api/lottery/delete" && request.method === "POST") return handleDeleteLottery(request, env);
 
   return renderAdminPage(env);
 }
@@ -406,7 +407,7 @@ textarea{min-height:80px;resize:vertical;font-family:inherit}
     </div>
 
     <div class="setting-group">
-      <div class="sg-title">进行中的抽奖</div>
+      <div class="sg-title">抽奖记录</div>
       <div id="lotteryList"><span style="color:#556;font-size:12px">选择群组后自动加载</span></div>
     </div>
   </div>
@@ -660,15 +661,30 @@ async function loadLotteries() {
     const d = await r.json();
     if (d.ok && d.lotteries.length > 0) {
       container.innerHTML = d.lotteries.map(function(l) {
-        const remaining = l.remaining > 0 ? Math.ceil(l.remaining / 60) + " 分钟" : "即将开奖";
-        return '<div style="background:#0f0f1a;border-radius:8px;padding:10px;margin-bottom:6px">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center">' +
-          '<div><b>' + l.prize + '</b> · ' + l.participants + '人参与 · ' + remaining + '</div>' +
-          '<button class="btn btn-danger btn-sm" onclick="drawLottery(' + l.chatId + ')">开奖</button>' +
-          '</div></div>';
+        if (l.status === 'active') {
+          const remaining = l.remaining > 0 ? Math.ceil(l.remaining / 60) + " 分钟" : "即将开奖";
+          return '<div style="background:#0f0f1a;border-radius:8px;padding:10px;margin-bottom:6px;border-left:3px solid #4caf50">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center">' +
+            '<div><b>' + l.prize + '</b> · ' + l.participants + '人参与 · ' + remaining + '</div>' +
+            '<div style="display:flex;gap:4px"><button class="btn btn-primary btn-sm" onclick="drawLottery(' + l.chatId + ')">开奖</button>' +
+            '<button class="btn btn-danger btn-sm" onclick="deleteLottery(' + l.chatId + ')">删除</button></div>' +
+            '</div></div>';
+        } else {
+          const winners = l.winners && l.winners.length > 0
+            ? l.winners.map(function(w, i) { return (i+1) + '. ' + w.name; }).join('、')
+            : '无人参与';
+          return '<div style="background:#0f0f1a;border-radius:8px;padding:10px;margin-bottom:6px;border-left:3px solid #667">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center">' +
+            '<div><b>' + l.prize + '</b> <span style="background:#2a2a3e;color:#889;padding:2px 6px;border-radius:4px;font-size:11px">已开奖</span><br>' +
+            '<span style="font-size:12px;color:#889">👥 ' + l.participants + '人参与</span></div>' +
+            '<button class="btn btn-danger btn-sm" onclick="deleteLottery(' + l.chatId + ')">删除记录</button>' +
+            '</div>' +
+            '<div style="margin-top:6px;padding:6px 8px;background:#1a1a2e;border-radius:6px;font-size:13px">' +
+            '🏆 <b>中奖者:</b> ' + winners + '</div></div>';
+        }
       }).join("");
     } else {
-      container.innerHTML = '<span style="color:#556;font-size:12px">当前没有进行中的抽奖</span>';
+      container.innerHTML = '<span style="color:#556;font-size:12px">暂无抽奖记录</span>';
     }
   } catch(e) { container.innerHTML = '<span style="color:#e53935;font-size:12px">加载失败</span>'; }
 }
@@ -714,6 +730,23 @@ async function drawLottery(chatId) {
       loadLotteries();
     } else {
       showToast(d.error || "开奖失败", "error");
+    }
+  } catch(e) { showToast("网络错误", "error"); }
+}
+
+async function deleteLottery(chatId) {
+  if (!confirm("确认删除此抽奖记录？")) return;
+  try {
+    const r = await fetch("/admin/api/lottery/delete", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ chatId })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast("✅ 已删除", "success");
+      loadLotteries();
+    } else {
+      showToast("删除失败", "error");
     }
   } catch(e) { showToast("网络错误", "error"); }
 }
@@ -818,7 +851,7 @@ async function handleGetGroups(request, env) {
 async function handleGetLotteries(request, env) {
   const url = new URL(request.url);
   const chatId = url.searchParams.get('chatId');
-  const lotteries = getActiveLotteries();
+  const lotteries = await getActiveLotteries(env.BOT_DB);
   const filtered = chatId ? lotteries.filter(l => l.chatId === parseInt(chatId)) : lotteries;
   return Response.json({ ok: true, lotteries: filtered });
 }
@@ -829,8 +862,7 @@ async function handleCreateLottery(request, env) {
     if (!chatId || !prize) {
       return Response.json({ ok: false, error: "缺少参数" });
     }
-    // 管理面板创建抽奖，msgFrom 为匿名
-    const result = await createLottery(env.BOT_TOKEN, chatId, 0, prize, duration || 5, winners || 1, null, { waitUntil: () => {} });
+    const result = await createLottery(env.BOT_DB, env.BOT_TOKEN, chatId, 0, prize, duration || 5, winners || 1, null, { waitUntil: () => {} });
     return Response.json({ ok: result.ok, message: result.message, error: result.ok ? undefined : result.message });
   } catch (e) {
     return Response.json({ ok: false, error: e.message });
@@ -843,8 +875,21 @@ async function handleDrawLottery(request, env) {
     if (!chatId) {
       return Response.json({ ok: false, error: "缺少参数" });
     }
-    const result = await forceDraw(env.BOT_TOKEN, chatId);
+    const result = await forceDraw(env.BOT_DB, env.BOT_TOKEN, chatId);
     return Response.json({ ok: result.ok, message: result.message, error: result.ok ? undefined : result.message });
+  } catch (e) {
+    return Response.json({ ok: false, error: e.message });
+  }
+}
+
+async function handleDeleteLottery(request, env) {
+  try {
+    const { chatId } = await request.json();
+    if (!chatId) {
+      return Response.json({ ok: false, error: "缺少参数" });
+    }
+    await deleteLotteryResult(env.BOT_DB, chatId);
+    return Response.json({ ok: true });
   } catch (e) {
     return Response.json({ ok: false, error: e.message });
   }

@@ -156,7 +156,7 @@ async function handleMessage(msg, env, ctx) {
           await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
           return;
         }
-        await handleLotteryCmd(token, chatId, userId, msg, args, config, ctx);
+        await handleLotteryCmd(token, db, chatId, userId, msg, args, config, ctx);
         return;
 
       case '/draw':
@@ -165,7 +165,7 @@ async function handleMessage(msg, env, ctx) {
           await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
           return;
         }
-        await handleDrawCmd(token, chatId, userId, msg, config, ctx);
+        await handleDrawCmd(token, db, chatId, userId, msg, config, ctx);
         return;
 
       case '/about':
@@ -600,7 +600,7 @@ async function handleQuietMode(token, db, chatId, userId, messageId, config, ctx
 /**
  * /lottery 或 /抽奖 - 创建新抽奖（解析参数后委托 lottery.js）
  */
-async function handleLotteryCmd(token, chatId, userId, msg, args, config, ctx) {
+async function handleLotteryCmd(token, db, chatId, userId, msg, args, config, ctx) {
   if (chatId > 0) {
     await replyMessage(token, chatId, msg.message_id, '⚠️ 该命令只能在群组中使用。');
     return;
@@ -636,7 +636,7 @@ async function handleLotteryCmd(token, chatId, userId, msg, args, config, ctx) {
     if (!isNaN(lastNum) && lastNum > 0) winnerCount = lastNum;
   }
 
-  const result = await createLottery(token, chatId, userId, prize, durationMin, winnerCount, msg.from, ctx);
+  const result = await createLottery(db, token, chatId, userId, prize, durationMin, winnerCount, msg.from, ctx);
   if (result.ok) {
     await deleteMessage(token, chatId, msg.message_id);
   } else {
@@ -647,7 +647,7 @@ async function handleLotteryCmd(token, chatId, userId, msg, args, config, ctx) {
 /**
  * /draw 或 /开奖 - 手动开奖
  */
-async function handleDrawCmd(token, chatId, userId, msg, config, ctx) {
+async function handleDrawCmd(token, db, chatId, userId, msg, config, ctx) {
   if (chatId > 0) {
     await replyMessage(token, chatId, msg.message_id, '⚠️ 该命令只能在群组中使用。');
     return;
@@ -657,7 +657,7 @@ async function handleDrawCmd(token, chatId, userId, msg, config, ctx) {
     await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限执行此操作（需要管理员权限）。', config, ctx);
     return;
   }
-  const result = await forceDraw(token, chatId);
+  const result = await forceDraw(db, token, chatId);
   if (!result.ok) {
     await replyNotification(token, chatId, msg.message_id, `⚠️ ${result.message}`, config, ctx);
   } else {
@@ -669,8 +669,12 @@ async function handleDrawCmd(token, chatId, userId, msg, config, ctx) {
  * 处理 callback_query（委托给 lottery.js）
  */
 async function handleCallbackQuery(callbackQuery, env) {
-  const { BOT_TOKEN: token } = env;
-  await handleLotteryCallback(token, callbackQuery);
+  const { BOT_TOKEN: token, BOT_DB: db } = env;
+  try {
+    await handleLotteryCallback(db, token, callbackQuery);
+  } catch (e) {
+    console.error('[handler] callback error:', e.message);
+  }
 }
 
 /**

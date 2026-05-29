@@ -1,46 +1,85 @@
 /**
- * 抽奖功能模块
- * 管理抽奖会话、创建抽奖、开奖逻辑
+ * 抽奖功能模块（D1 数据库存储，Worker 重启不丢失）
  */
 
 import {
   sendWithKeyboard, deleteMessage, editMessageText, editMessageReplyMarkup,
-  answerCallbackQuery, sendMessage,
+  answerCallbackQuery,
 } from './telegram';
 
-// 抽奖会话存储（内存 Map，短期数据无需持久化）
-const lotterySessions = new Map();
+/**
+ * 获取指定群的活跃抽奖
+ */
+export async function getLottery(db, chatId) {
+  const row = await db.prepare("SELECT * FROM lottery_sessions WHERE chat_id = ?").bind(chatId).first();
+  if (!row) return null;
+  return {
+    chatId: row.chat_id,
+    prize: row.prize,
+    messageId: row.message_id,
+    winnerCount: row.winner_count,
+    endTime: row.end_time,
+    participants: JSON.parse(row.participants_json || '{}'),
+    status: row.status || 'active',
+    winners: JSON.parse(row.winners_json || '[]'),
+    drawnAt: row.drawn_at,
+  };
+}
 
 /**
- * 获取所有活跃抽奖
+ * 获取所有抽奖（管理面板用，含已完成的）
  */
-export function getActiveLotteries() {
-  const result = [];
-  for (const [key, lottery] of lotterySessions) {
-    if (!lottery.timerFired) {
-      result.push({
-        key,
-        chatId: lottery.chatId,
-        prize: lottery.prize,
-        participants: lottery.participants.size,
-        winnerCount: lottery.winnerCount,
-        endTime: lottery.endTime,
-        remaining: Math.max(0, Math.round((lottery.endTime - Date.now()) / 1000)),
-      });
-    }
-  }
-  return result;
+export async function getActiveLotteries(db) {
+  const result = await db.prepare("SELECT * FROM lottery_sessions ORDER BY created_at DESC").all();
+  return (result.results || []).map(row => ({
+    chatId: row.chat_id,
+    prize: row.prize,
+    participants: Object.keys(JSON.parse(row.participants_json || '{}')).length,
+    winnerCount: row.winner_count,
+    endTime: row.end_time,
+    remaining: Math.max(0, Math.round((row.end_time - Date.now()) / 1000)),
+    status: row.status || 'active',
+    winners: JSON.parse(row.winners_json || '[]'),
+    drawnAt: row.drawn_at,
+  }));
+}
+
+/**
+ * 保存抽奖到 D1
+ */
+async function saveLottery(db, chatId, prize, messageId, winnerCount, endTime) {
+  await db.prepare(
+    "INSERT INTO lottery_sessions (chat_id, prize, message_id, winner_count, end_time, participants_json) VALUES (?1, ?2, ?3, ?4, ?5, '{}') ON CONFLICT(chat_id) DO UPDATE SET prize=?2, message_id=?3, winner_count=?4, end_time=?5, participants_json='{}'"
+  ).bind(chatId, prize, messageId, winnerCount, endTime).run();
+}
+
+/**
+ * 更新参与者
+ */
+async function updateParticipants(db, chatId, participants) {
+  await db.prepare("UPDATE lottery_sessions SET participants_json = ? WHERE chat_id = ?")
+    .bind(JSON.stringify(participants), chatId).run();
+}
+
+/**
+ * 删除抽奖记录
+ */
+async function deleteLottery(db, chatId) {
+  await db.prepare("DELETE FROM lottery_sessions WHERE chat_id = ?").bind(chatId).run();
 }
 
 /**
  * 创建新抽奖
- * @returns {{ ok: boolean, message?: string }}
  */
-export async function createLottery(token, chatId, userId, prize, durationMin, winnerCount, msgFrom, ctx) {
-  const key = `lottery:${chatId}`;
-
-  if (lotterySessions.has(key)) {
+export async function createLottery(db, token, chatId, userId, prize, durationMin, winnerCount, msgFrom, ctx) {
+  const existing = await getLottery(db, chatId);
+  if (existing && existing.status === 'active') {
     return { ok: false, message: '当前已有进行中的抽奖，请等待结束后再创建。' };
+  }
+
+  // 如果有已完成的旧抽奖，先删除
+  if (existing && existing.status === 'completed') {
+    await deleteLottery(db, chatId);
   }
 
   if (durationMin > 1440) durationMin = 1440;
@@ -63,25 +102,15 @@ export async function createLottery(token, chatId, userId, prize, durationMin, w
 
   const messageId = result.result.message_id;
 
-  lotterySessions.set(key, {
-    chatId,
-    prize,
-    participants: new Map(),
-    messageId,
-    endTime,
-    winnerCount,
-    timerFired: false,
-    msgFrom,
-  });
+  // 保存到 D1
+  await saveLottery(db, chatId, prize, messageId, winnerCount, endTime);
 
   // 定时自动开奖
   ctx.waitUntil((async () => {
     await new Promise(resolve => setTimeout(resolve, durationMin * 60 * 1000 + 2000));
-    const lottery = lotterySessions.get(key);
-    if (lottery && !lottery.timerFired) {
-      lottery.timerFired = true;
-      await drawWinner(token, chatId, messageId, lottery);
-      lotterySessions.delete(key);
+    const lottery = await getLottery(db, chatId);
+    if (lottery && lottery.status === 'active' && Date.now() >= lottery.endTime) {
+      await drawWinner(db, token, chatId, lottery);
     }
   })());
 
@@ -90,30 +119,29 @@ export async function createLottery(token, chatId, userId, prize, durationMin, w
 
 /**
  * 手动开奖
- * @returns {{ ok: boolean, message: string }}
  */
-export async function forceDraw(token, chatId) {
-  const key = `lottery:${chatId}`;
-  const lottery = lotterySessions.get(key);
+export async function forceDraw(db, token, chatId) {
+  const lottery = await getLottery(db, chatId);
 
-  if (!lottery || lottery.timerFired) {
+  if (!lottery || lottery.status !== 'active') {
     return { ok: false, message: '当前没有进行中的抽奖。' };
   }
 
-  lottery.timerFired = true;
-  await drawWinner(token, chatId, lottery.messageId, lottery);
-  lotterySessions.delete(key);
+  await drawWinner(db, token, chatId, lottery);
 
   return { ok: true, message: '开奖完成！' };
 }
 
 /**
- * 执行开奖逻辑
+ * 执行开奖逻辑（结果保存到 D1）
  */
-async function drawWinner(token, chatId, messageId, lottery) {
-  const { prize, participants, winnerCount } = lottery;
+async function drawWinner(db, token, chatId, lottery) {
+  const { prize, participants, winnerCount, messageId } = lottery;
+  const participantList = Object.values(participants);
 
-  if (participants.size === 0) {
+  if (participantList.length === 0) {
+    await db.prepare("UPDATE lottery_sessions SET status = 'completed', winners_json = '[]', drawn_at = ? WHERE chat_id = ?")
+      .bind(Math.floor(Date.now() / 1000), chatId).run();
     await editMessageText(token, chatId, messageId,
       `🎰 <b>抽奖结束</b>\n\n` +
       `🎁 奖品: <b>${prize}</b>\n\n` +
@@ -123,14 +151,17 @@ async function drawWinner(token, chatId, messageId, lottery) {
     return;
   }
 
-  const allParticipants = Array.from(participants.values());
   const winners = [];
-  const pool = [...allParticipants];
+  const pool = [...participantList];
 
   while (winners.length < winnerCount && pool.length > 0) {
     const idx = Math.floor(Math.random() * pool.length);
     winners.push(pool.splice(idx, 1)[0]);
   }
+
+  // 保存中奖结果到 D1
+  await db.prepare("UPDATE lottery_sessions SET status = 'completed', winners_json = ?, drawn_at = ? WHERE chat_id = ?")
+    .bind(JSON.stringify(winners), Math.floor(Date.now() / 1000), chatId).run();
 
   const winnersText = winners.map((w, i) =>
     `${i + 1}. <a href="tg://user?id=${w.userId}">${w.name}</a>`
@@ -139,7 +170,7 @@ async function drawWinner(token, chatId, messageId, lottery) {
   const resultText =
     `🎰 <b>抽奖结果</b>\n\n` +
     `🎁 奖品: <b>${prize}</b>\n` +
-    `👥 参与人数: <b>${participants.size}</b> 人\n\n` +
+    `👥 参与人数: <b>${participantList.length}</b> 人\n\n` +
     `🏆 <b>中奖者:</b>\n${winnersText}\n\n` +
     `🎉 恭喜以上中奖者！`;
 
@@ -149,52 +180,60 @@ async function drawWinner(token, chatId, messageId, lottery) {
 }
 
 /**
+ * 删除抽奖结果记录
+ */
+export async function deleteLotteryResult(db, chatId) {
+  await deleteLottery(db, chatId);
+}
+
+/**
  * 处理 inline 按钮点击（抽奖参与）
  */
-export async function handleLotteryCallback(token, callbackQuery) {
+export async function handleLotteryCallback(db, token, callbackQuery) {
   const { data, from, message, id: callbackId } = callbackQuery;
   const chatId = message?.chat?.id;
   const userId = from.id;
   const name = from.first_name || '用户';
 
-  if (!chatId || data !== 'lottery_join') return;
+  if (!chatId || data !== 'lottery_join') {
+    await answerCallbackQuery(token, callbackId, '❓ 未知操作');
+    return;
+  }
 
-  await answerCallbackQuery(token, callbackId);
-
-  const key = `lottery:${chatId}`;
-  const lottery = lotterySessions.get(key);
+  const lottery = await getLottery(db, chatId);
 
   if (!lottery) {
+    await answerCallbackQuery(token, callbackId, '❌ 抽奖已结束或不存在');
+    return;
+  }
+
+  // 检查是否已过期
+  if (Date.now() >= lottery.endTime) {
     await answerCallbackQuery(token, callbackId, '❌ 抽奖已结束');
     return;
   }
 
-  if (lottery.participants.has(userId)) {
-    await answerCallbackQuery(token, callbackId, '✅ 你已经参与了，无需重复点击');
+  if (lottery.participants[userId]) {
+    await answerCallbackQuery(token, callbackId, '✅ 你已参与，无需重复点击');
     return;
   }
 
-  lottery.participants.set(userId, {
-    userId,
-    name,
-    username: from.username,
-  });
+  // 添加参与者并保存到 D1
+  lottery.participants[userId] = { userId, name, username: from.username };
+  await updateParticipants(db, chatId, lottery.participants);
 
-  const count = lottery.participants.size;
+  const count = Object.keys(lottery.participants).length;
+
+  // 更新按钮显示参与人数
   try {
     await editMessageReplyMarkup(token, chatId, message.message_id,
       JSON.stringify({
         inline_keyboard: [[{ text: `🎲 参与抽奖 (${count}人)`, callback_data: 'lottery_join' }]]
       })
     );
-  } catch (e) { /* Telegram 限流忽略 */ }
+  } catch (e) {
+    console.error('[lottery] editMessageReplyMarkup failed:', e.message);
+  }
 
   await answerCallbackQuery(token, callbackId, `✅ 参与成功！当前 ${count} 人参与`);
-}
-
-/**
- * 清理所有过期抽奖（用于管理员面板重置等场景）
- */
-export function clearAllLotteries() {
-  lotterySessions.clear();
 }

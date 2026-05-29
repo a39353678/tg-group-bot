@@ -67,6 +67,14 @@ async function setupWebhook(request, env) {
 
   const webhookUrlFull = webhookUrl.endsWith('/') ? webhookUrl : webhookUrl + '/';
 
+  // 先删除旧 webhook，确保 allowed_updates 更新生效
+  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/deleteWebhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ drop_pending_updates: false }),
+  });
+
+  // 重新设置 webhook
   const apiUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/setWebhook`;
   const response = await fetch(apiUrl, {
     method: 'POST',
