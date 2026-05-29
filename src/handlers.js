@@ -612,7 +612,7 @@ async function handleLotteryCmd(token, db, chatId, userId, msg, args, config, ct
   }
   if (args.length === 0) {
     await replyNotification(db, token, chatId, msg.message_id,
-      '📋 用法: /抽奖 奖品名称 [时长分钟] [中奖人数]\n示例: /抽奖 红包 10 3', config);
+      '📋 用法: /抽奖 奖品名称 [时长分钟] [中奖人数]\n示例: /抽奖 红包 10 3', config, ctx);
     return;
   }
 
