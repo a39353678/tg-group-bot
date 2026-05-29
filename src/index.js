@@ -6,7 +6,7 @@
 import { handleUpdate } from './handlers';
 import { handleAdmin } from './admin';
 import { getGroupList, getGroupConfig, saveGroupConfig } from './config.js';
-import { setChatPermissions, PERMISSIONS_RESTORE_ALL, deleteMessage } from './telegram';
+import { setChatPermissions, PERMISSIONS_RESTORE_ALL } from './telegram';
 
 export default {
   async fetch(request, env, ctx) {
@@ -45,13 +45,10 @@ export default {
   },
 
   /**
-   * Cron 定时任务 - 每5分钟检查安静模式到期 + 处理待删除消息
+   * Cron 定时任务 - 每5分钟检查安静模式到期
    */
   async scheduled(event, env, ctx) {
     const { BOT_TOKEN: token, BOT_DB: db } = env;
-
-    // 处理待删除的通知消息
-    ctx.waitUntil(processPendingDeletions(token, db));
 
     // 检查安静模式到期
     const groups = await getGroupList(db);
@@ -94,24 +91,6 @@ async function setupWebhook(request, env) {
   return new Response(JSON.stringify(result, null, 2), {
     headers: { 'Content-Type': 'application/json' },
   });
-}
-
-/**
- * 处理 D1 中到期的待删除消息
- */
-async function processPendingDeletions(token, db) {
-  try {
-    const now = Math.floor(Date.now() / 1000);
-    const rows = await db.prepare("SELECT id, chat_id, message_id FROM pending_deletions WHERE delete_at <= ?").bind(now).all();
-    for (const row of (rows.results || [])) {
-      try {
-        await deleteMessage(token, row.chat_id, row.message_id);
-      } catch (e) { /* 忽略删除失败 */ }
-      await db.prepare("DELETE FROM pending_deletions WHERE id = ?").bind(row.id).run();
-    }
-  } catch (e) {
-    console.error('processPendingDeletions error:', e.message);
-  }
 }
 
 /**

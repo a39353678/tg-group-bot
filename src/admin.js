@@ -368,8 +368,7 @@ textarea{min-height:80px;resize:vertical;font-family:inherit}
       <label class="toggle"><input type="checkbox" data-key="admin_commands"><span class="sl"></span></label>
     </div>
     <div class="row">
-      <div><div class="label"><span class="icon">⏱️</span> 通知自动删除</div><div class="desc">封禁/踢出/垃圾提醒等通知在 X 秒后自动删除，0=不删除</div></div>
-      <input type="number" data-key="auto_delete_notification_seconds" min="0" max="3600" value="30" style="width:80px;margin-bottom:0">
+      <div><div class="label"><span class="icon">⏱️</span> 通知自动删除</div><div class="desc">封禁/踢出/垃圾提醒等通知 30 秒后自动删除</div></div>
     </div>
   </div>
 </div>
