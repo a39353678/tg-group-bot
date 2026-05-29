@@ -291,6 +291,7 @@ tg-group-bot/
 │   ├── ai.js             # Workers AI 集成：对话、垃圾检测、内容过滤
 │   ├── admin.js          # Web 管理面板（内嵌 HTML+JS）
 │   ├── captcha.js        # 算术验证码生成与验证
+│   ├── lottery.js        # 抽奖功能：创建、参与、开奖
 │   └── telegram.js       # Telegram Bot API 封装
 ├── migrations/
 │   └── 0001_init.sql     # D1 数据库初始化脚本
