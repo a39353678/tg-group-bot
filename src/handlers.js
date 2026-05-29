@@ -81,9 +81,9 @@ async function handleMessage(msg, env, ctx) {
         const reason = config.quiet_hours_block_all
           ? '当前为安静时段，群聊已关闭'
           : '当前为安静时段，禁止发送媒体文件';
-        await sendNotification(token, chatId,
+        await sendNotification(db, token, chatId,
           `🔇 <b>${userName}</b> ${reason}（${config.quiet_hours_start}-${config.quiet_hours_end}）`,
-          config, ctx
+          config
         );
       } catch (e) { /* 忽略删除失败 */ }
       return;
@@ -131,10 +131,10 @@ async function handleMessage(msg, env, ctx) {
           await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
           return;
         }
-        if (cmd === '/ban') await handleBan(token, chatId, userId, msg, args, config, ctx);
-        else if (cmd === '/kick') await handleKick(token, chatId, userId, msg, args, config, ctx);
-        else if (cmd === '/mute') await handleMute(token, chatId, userId, msg, args, config, ctx);
-        else if (cmd === '/unmute') await handleUnmute(token, chatId, userId, msg, config, ctx);
+        if (cmd === '/ban') await handleBan(token, chatId, userId, msg, args, config);
+        else if (cmd === '/kick') await handleKick(token, chatId, userId, msg, args, config);
+        else if (cmd === '/mute') await handleMute(token, chatId, userId, msg, args, config);
+        else if (cmd === '/unmute') await handleUnmute(token, chatId, userId, msg, config);
         return;
 
       case '/ping':
@@ -147,7 +147,7 @@ async function handleMessage(msg, env, ctx) {
           await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
           return;
         }
-        await handleQuietMode(token, db, chatId, userId, messageId, config, ctx);
+        await handleQuietMode(token, db, chatId, userId, messageId, config);
         return;
 
       case '/lottery':
@@ -156,7 +156,7 @@ async function handleMessage(msg, env, ctx) {
           await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
           return;
         }
-        await handleLotteryCmd(token, db, chatId, userId, msg, args, config, ctx);
+        await handleLotteryCmd(token, db, chatId, userId, msg, args, config);
         return;
 
       case '/draw':
@@ -165,7 +165,7 @@ async function handleMessage(msg, env, ctx) {
           await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
           return;
         }
-        await handleDrawCmd(token, db, chatId, userId, msg, config, ctx);
+        await handleDrawCmd(token, db, chatId, userId, msg, config);
         return;
 
       case '/about':
@@ -212,9 +212,9 @@ async function handleMessage(msg, env, ctx) {
         for (const kw of config.custom_spam_keywords) {
           if (text.toLowerCase().includes(kw.toLowerCase())) {
             if (config.auto_delete_spam) await deleteMessage(token, chatId, messageId);
-            await sendNotification(token, chatId,
+            await sendNotification(db, token, chatId,
               `⚠️ <b>${userName}</b> 消息命中垃圾关键词，${config.auto_delete_spam ? '已删除' : '请注意'}。`,
-              config, ctx
+              config
             );
             return;
           }
@@ -225,9 +225,9 @@ async function handleMessage(msg, env, ctx) {
         for (const kw of config.custom_toxic_keywords) {
           if (text.toLowerCase().includes(kw.toLowerCase())) {
             await deleteMessage(token, chatId, messageId);
-            await sendNotification(token, chatId,
+            await sendNotification(db, token, chatId,
               `⚠️ 成员 <b>${userName}</b> 的消息因包含敏感词已被删除。`,
-              config, ctx
+              config
             );
             return;
           }
@@ -254,10 +254,10 @@ async function handleMessage(msg, env, ctx) {
         if (config.auto_delete_spam) {
           await deleteMessage(token, chatId, messageId);
         }
-        await sendNotification(token, chatId,
+        await sendNotification(db, token, chatId,
           `⚠️ <b>${userName}</b> 你的消息被判定为垃圾广告${config.auto_delete_spam ? '，已被删除' : ''}。\n` +
           `原因: ${spamResult.reason}`,
-          config, ctx
+          config
         );
         return;
       }
@@ -268,9 +268,9 @@ async function handleMessage(msg, env, ctx) {
       const toxicResult = await detectToxicContent(ai, text);
       if (toxicResult.isToxic) {
         await deleteMessage(token, chatId, messageId);
-        await sendNotification(token, chatId,
+        await sendNotification(db, token, chatId,
           `⚠️ 成员 <b>${userName}</b> 的消息因包含不当内容已被删除。`,
-          config, ctx
+          config
         );
         return;
       }
@@ -423,12 +423,12 @@ async function handleAIQuery(token, chatId, messageId, question, ai, chatTitle, 
 /**
  * /ban - 封禁用户
  */
-async function handleBan(token, chatId, adminId, msg, args, config, ctx) {
+async function handleBan(token, chatId, adminId, msg, args, config) {
   // 检查是否回复了消息
   if (!msg.reply_to_message) {
-    await replyNotification(token, chatId, msg.message_id,
+    await replyNotification(db, token, chatId, msg.message_id,
       '⚠️ 请回复你要封禁的用户的消息。\n用法: /ban (回复某条消息)',
-      config, ctx
+      config
     );
     return;
   }
@@ -436,33 +436,33 @@ async function handleBan(token, chatId, adminId, msg, args, config, ctx) {
   // 检查管理员权限
   const isAdmin = await checkAdmin(token, chatId, adminId);
   if (!isAdmin) {
-    await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限执行此操作（需要管理员权限）。', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, '⛔ 你没有权限执行此操作（需要管理员权限）。', config);
     return;
   }
 
   const targetUser = msg.reply_to_message.from;
   await banMember(token, chatId, targetUser.id);
-  await replyNotification(token, chatId, msg.message_id,
+  await replyNotification(db, token, chatId, msg.message_id,
     `🔨 用户 <b>${targetUser.first_name}</b> 已被封禁。`,
-    config, ctx
+    config
   );
 }
 
 /**
  * /kick - 踢出用户
  */
-async function handleKick(token, chatId, adminId, msg, args, config, ctx) {
+async function handleKick(token, chatId, adminId, msg, args, config) {
   if (!msg.reply_to_message) {
-    await replyNotification(token, chatId, msg.message_id,
+    await replyNotification(db, token, chatId, msg.message_id,
       '⚠️ 请回复你要踢出的用户的消息。',
-      config, ctx
+      config
     );
     return;
   }
 
   const isAdmin = await checkAdmin(token, chatId, adminId);
   if (!isAdmin) {
-    await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限执行此操作。', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, '⛔ 你没有权限执行此操作。', config);
     return;
   }
 
@@ -470,24 +470,24 @@ async function handleKick(token, chatId, adminId, msg, args, config, ctx) {
   await banMember(token, chatId, targetUser.id);
   // 立即解封，效果等同于踢出
   await unbanMember(token, chatId, targetUser.id);
-  await replyNotification(token, chatId, msg.message_id,
+  await replyNotification(db, token, chatId, msg.message_id,
     `👢 用户 <b>${targetUser.first_name}</b> 已被移出群组。`,
-    config, ctx
+    config
   );
 }
 
 /**
  * /mute - 禁言用户
  */
-async function handleMute(token, chatId, adminId, msg, args, config, ctx) {
+async function handleMute(token, chatId, adminId, msg, args, config) {
   if (!msg.reply_to_message) {
-    await replyNotification(token, chatId, msg.message_id, '⚠️ 请回复你要禁言的用户的消息。', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, '⚠️ 请回复你要禁言的用户的消息。', config);
     return;
   }
 
   const isAdmin = await checkAdmin(token, chatId, adminId);
   if (!isAdmin) {
-    await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限执行此操作。', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, '⛔ 你没有权限执行此操作。', config);
     return;
   }
 
@@ -499,39 +499,39 @@ async function handleMute(token, chatId, adminId, msg, args, config, ctx) {
   const targetUser = msg.reply_to_message.from;
 
   await restrictMember(token, chatId, targetUser.id, untilDate);
-  await replyNotification(token, chatId, msg.message_id,
+  await replyNotification(db, token, chatId, msg.message_id,
     `🔇 用户 <b>${targetUser.first_name}</b> 已被禁言 ${minutes} 分钟。`,
-    config, ctx
+    config
   );
 }
 
 /**
  * /unmute - 解除禁言
  */
-async function handleUnmute(token, chatId, adminId, msg, config, ctx) {
+async function handleUnmute(token, chatId, adminId, msg, config) {
   if (!msg.reply_to_message) {
-    await replyNotification(token, chatId, msg.message_id, '⚠️ 请回复你要解除禁言的用户的消息。', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, '⚠️ 请回复你要解除禁言的用户的消息。', config);
     return;
   }
 
   const isAdmin = await checkAdmin(token, chatId, adminId);
   if (!isAdmin) {
-    await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限执行此操作。', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, '⛔ 你没有权限执行此操作。', config);
     return;
   }
 
   const targetUser = msg.reply_to_message.from;
   await unrestrictMember(token, chatId, targetUser.id);
-  await replyNotification(token, chatId, msg.message_id,
+  await replyNotification(db, token, chatId, msg.message_id,
     `🔊 用户 <b>${targetUser.first_name}</b> 已被解除禁言。`,
-    config, ctx
+    config
   );
 }
 
 /**
  * /quiet 或 /安静模式 - 切换安静模式（使用 setChatPermissions 限制全员发言）
  */
-async function handleQuietMode(token, db, chatId, userId, messageId, config, ctx) {
+async function handleQuietMode(token, db, chatId, userId, messageId, config) {
   if (chatId > 0) {
     await replyMessage(token, chatId, messageId, '⚠️ 该命令只能在群组中使用。');
     return;
@@ -539,7 +539,7 @@ async function handleQuietMode(token, db, chatId, userId, messageId, config, ctx
 
   const isAdmin = await checkAdmin(token, chatId, userId);
   if (!isAdmin) {
-    await replyNotification(token, chatId, messageId, '⛔ 你没有权限执行此操作（需要管理员权限）。', config, ctx);
+    await replyNotification(db, token, chatId, messageId, '⛔ 你没有权限执行此操作（需要管理员权限）。', config);
     return;
   }
 
@@ -562,11 +562,11 @@ async function handleQuietMode(token, db, chatId, userId, messageId, config, ctx
     // 保存配置状态
     await saveGroupConfig(db, chatId, { quiet_hours_enabled: true });
 
-    await replyNotification(token, chatId, messageId,
+    await replyNotification(db, token, chatId, messageId,
       `🔇 安静模式已 <b>开启</b>\n` +
       `普通成员已限制发言，将在 ${config.quiet_hours_end} 自动恢复。\n\n` +
       `管理员可随时输入 /安静模式 手动关闭。`,
-      config, ctx
+      config
     );
 
     // 计划自动恢复发言权限
@@ -588,9 +588,9 @@ async function handleQuietMode(token, db, chatId, userId, messageId, config, ctx
 
     await saveGroupConfig(db, chatId, { quiet_hours_enabled: false });
 
-    await replyNotification(token, chatId, messageId,
+    await replyNotification(db, token, chatId, messageId,
       '🔊 安静模式已 <b>关闭</b>，现在可以发言了。',
-      config, ctx
+      config
     );
   }
 }
@@ -600,19 +600,19 @@ async function handleQuietMode(token, db, chatId, userId, messageId, config, ctx
 /**
  * /lottery 或 /抽奖 - 创建新抽奖（解析参数后委托 lottery.js）
  */
-async function handleLotteryCmd(token, db, chatId, userId, msg, args, config, ctx) {
+async function handleLotteryCmd(token, db, chatId, userId, msg, args, config) {
   if (chatId > 0) {
     await replyMessage(token, chatId, msg.message_id, '⚠️ 该命令只能在群组中使用。');
     return;
   }
   const isAdmin = await checkAdmin(token, chatId, userId);
   if (!isAdmin) {
-    await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限创建抽奖（需要管理员权限）。', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, '⛔ 你没有权限创建抽奖（需要管理员权限）。', config);
     return;
   }
   if (args.length === 0) {
-    await replyNotification(token, chatId, msg.message_id,
-      '📋 用法: /抽奖 奖品名称 [时长分钟] [中奖人数]\n示例: /抽奖 红包 10 3', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id,
+      '📋 用法: /抽奖 奖品名称 [时长分钟] [中奖人数]\n示例: /抽奖 红包 10 3', config);
     return;
   }
 
@@ -640,26 +640,26 @@ async function handleLotteryCmd(token, db, chatId, userId, msg, args, config, ct
   if (result.ok) {
     await deleteMessage(token, chatId, msg.message_id);
   } else {
-    await replyNotification(token, chatId, msg.message_id, `⚠️ ${result.message}`, config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, `⚠️ ${result.message}`, config);
   }
 }
 
 /**
  * /draw 或 /开奖 - 手动开奖
  */
-async function handleDrawCmd(token, db, chatId, userId, msg, config, ctx) {
+async function handleDrawCmd(token, db, chatId, userId, msg, config) {
   if (chatId > 0) {
     await replyMessage(token, chatId, msg.message_id, '⚠️ 该命令只能在群组中使用。');
     return;
   }
   const isAdmin = await checkAdmin(token, chatId, userId);
   if (!isAdmin) {
-    await replyNotification(token, chatId, msg.message_id, '⛔ 你没有权限执行此操作（需要管理员权限）。', config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, '⛔ 你没有权限执行此操作（需要管理员权限）。', config);
     return;
   }
   const result = await forceDraw(db, token, chatId);
   if (!result.ok) {
-    await replyNotification(token, chatId, msg.message_id, `⚠️ ${result.message}`, config, ctx);
+    await replyNotification(db, token, chatId, msg.message_id, `⚠️ ${result.message}`, config);
   } else {
     await deleteMessage(token, chatId, msg.message_id);
   }
@@ -716,41 +716,34 @@ async function autoRestoreQuietIfExpired(token, db, chatId, config) {
 /**
  * 发送通知消息并支持自动删除
  */
-async function sendNotification(token, chatId, text, config, ctx) {
+async function sendNotification(db, token, chatId, text, config) {
   const result = await sendMessage(token, chatId, text);
-  await scheduleAutoDelete(token, chatId, result, config, ctx);
+  await scheduleAutoDelete(db, token, chatId, result, config);
   return result;
 }
 
 /**
  * 回复通知消息并支持自动删除
  */
-async function replyNotification(token, chatId, messageId, text, config, ctx) {
+async function replyNotification(db, token, chatId, messageId, text, config) {
   const result = await replyMessage(token, chatId, messageId, text);
-  await scheduleAutoDelete(token, chatId, result, config, ctx);
+  await scheduleAutoDelete(db, token, chatId, result, config);
   return result;
 }
 
 /**
- * 如果配置了自动删除时间，计划删除消息
+ * 将待删除消息写入 D1，由 Cron 每分钟处理
  */
-async function scheduleAutoDelete(token, chatId, result, config, ctx) {
+async function scheduleAutoDelete(db, token, chatId, result, config) {
   const seconds = config.auto_delete_notification_seconds;
   if (seconds > 0 && result?.result?.message_id) {
     const msgId = result.result.message_id;
-    const deletePromise = (async () => {
-      try {
-        // 轮询等待，比 setTimeout 更可靠
-        const start = Date.now();
-        const waitMs = seconds * 1000;
-        while (Date.now() - start < waitMs) {
-          await new Promise(r => setTimeout(r, Math.min(1000, waitMs - (Date.now() - start))));
-        }
-        await deleteMessage(token, chatId, msgId);
-      } catch (e) { /* 忽略删除失败 */ }
-    })();
-    if (typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(deletePromise);
+    const deleteAt = Math.floor(Date.now() / 1000) + seconds;
+    try {
+      await db.prepare("INSERT INTO pending_deletions (chat_id, message_id, delete_at) VALUES (?, ?, ?)")
+        .bind(chatId, msgId, deleteAt).run();
+    } catch (e) {
+      console.error('scheduleAutoDelete insert failed:', e.message);
     }
   }
 }

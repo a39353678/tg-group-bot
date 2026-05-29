@@ -37,6 +37,13 @@ CREATE TABLE IF NOT EXISTS lottery_sessions (
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+CREATE TABLE IF NOT EXISTS pending_deletions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  delete_at INTEGER NOT NULL
+);
+
 -- 初始化全局配置和密码占位行
 INSERT OR IGNORE INTO global_config (id, config_json) VALUES (1, '{}');
 INSERT OR IGNORE INTO admin_password (id, password) VALUES (1, '');

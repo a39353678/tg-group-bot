@@ -4,7 +4,7 @@ compatibility_date = "2026-05-28"
 
 # Cron 定时任务（每5分钟检查安静模式是否到期）
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 
 # Workers AI 绑定
 [ai]
