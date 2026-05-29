@@ -138,7 +138,7 @@ async function handleMessage(msg, env, ctx) {
         return;
 
       case '/ping':
-        await replyMessage(token, chatId, messageId, '🏓 Pong！机器人运行正常。');
+        await replyNotification(db, token, chatId, messageId, '🏓 Pong！机器人运行正常。', config, ctx);
         return;
 
       case '/quiet':
