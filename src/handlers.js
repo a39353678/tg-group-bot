@@ -131,10 +131,10 @@ async function handleMessage(msg, env, ctx) {
           await replyMessage(token, chatId, messageId, '⚠️ 管理命令功能已关闭。');
           return;
         }
-        if (cmd === '/ban') await handleBan(token, chatId, userId, msg, args, config);
-        else if (cmd === '/kick') await handleKick(token, chatId, userId, msg, args, config);
-        else if (cmd === '/mute') await handleMute(token, chatId, userId, msg, args, config);
-        else if (cmd === '/unmute') await handleUnmute(token, chatId, userId, msg, config);
+        if (cmd === '/ban') await handleBan(token, db, chatId, userId, msg, args, config);
+        else if (cmd === '/kick') await handleKick(token, db, chatId, userId, msg, args, config);
+        else if (cmd === '/mute') await handleMute(token, db, chatId, userId, msg, args, config);
+        else if (cmd === '/unmute') await handleUnmute(token, db, chatId, userId, msg, config);
         return;
 
       case '/ping':
@@ -423,7 +423,7 @@ async function handleAIQuery(token, chatId, messageId, question, ai, chatTitle, 
 /**
  * /ban - 封禁用户
  */
-async function handleBan(token, chatId, adminId, msg, args, config) {
+async function handleBan(token, db, chatId, adminId, msg, args, config) {
   // 检查是否回复了消息
   if (!msg.reply_to_message) {
     await replyNotification(db, token, chatId, msg.message_id,
@@ -451,7 +451,7 @@ async function handleBan(token, chatId, adminId, msg, args, config) {
 /**
  * /kick - 踢出用户
  */
-async function handleKick(token, chatId, adminId, msg, args, config) {
+async function handleKick(token, db, chatId, adminId, msg, args, config) {
   if (!msg.reply_to_message) {
     await replyNotification(db, token, chatId, msg.message_id,
       '⚠️ 请回复你要踢出的用户的消息。',
@@ -479,7 +479,7 @@ async function handleKick(token, chatId, adminId, msg, args, config) {
 /**
  * /mute - 禁言用户
  */
-async function handleMute(token, chatId, adminId, msg, args, config) {
+async function handleMute(token, db, chatId, adminId, msg, args, config) {
   if (!msg.reply_to_message) {
     await replyNotification(db, token, chatId, msg.message_id, '⚠️ 请回复你要禁言的用户的消息。', config);
     return;
@@ -508,7 +508,7 @@ async function handleMute(token, chatId, adminId, msg, args, config) {
 /**
  * /unmute - 解除禁言
  */
-async function handleUnmute(token, chatId, adminId, msg, config) {
+async function handleUnmute(token, db, chatId, adminId, msg, config) {
   if (!msg.reply_to_message) {
     await replyNotification(db, token, chatId, msg.message_id, '⚠️ 请回复你要解除禁言的用户的消息。', config);
     return;
